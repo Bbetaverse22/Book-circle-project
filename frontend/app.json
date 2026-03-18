@@ -1,0 +1,32 @@
+{
+  "expo": {
+    "name": "BookCircle",
+    "slug": "bookcircle",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "scheme": "bookcircle",
+    "userInterfaceStyle": "automatic",
+    "plugins": [
+      "expo-router",
+      [
+        "expo-av",
+        {
+          "microphonePermission": "BookCircle needs microphone access to record your voice for chat."
+        }
+      ]
+    ],
+    "ios": {
+      "supportsTablet": false,
+      "bundleIdentifier": "com.bookcircle.app"
+    },
+    "android": {
+      "adaptiveIcon": {
+        "backgroundColor": "#1a1a2e"
+      },
+      "package": "com.bookcircle.app"
+    },
+    "experiments": {
+      "typedRoutes": true
+    }
+  }
+}
