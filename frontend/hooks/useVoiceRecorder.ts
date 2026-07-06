@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { Alert } from 'react-native';
 import { Audio } from 'expo-av';
 
 const API_URL = process.env.EXPO_PUBLIC_API_URL ?? 'http://localhost:3000';
@@ -10,7 +11,7 @@ export function useVoiceRecorder() {
   const startRecording = async () => {
     const { granted } = await Audio.requestPermissionsAsync();
     if (!granted) {
-      alert('Microphone permission is required.');
+      Alert.alert('Permission Required', 'Microphone access is needed for voice input.');
       return;
     }
 

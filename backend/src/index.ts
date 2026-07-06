@@ -4,15 +4,23 @@ import dotenv from 'dotenv';
 import voiceRoutes from './routes/voice';
 import agentRoutes from './routes/agents';
 import fs from 'fs';
+import path from 'path';
 
 dotenv.config();
+
+const REQUIRED_ENV_VARS = ['ANTHROPIC_API_KEY', 'OPENAI_API_KEY', 'ELEVENLABS_API_KEY'] as const;
+const missing = REQUIRED_ENV_VARS.filter((key) => !process.env[key]);
+if (missing.length > 0) {
+  console.error(`Missing required environment variables: ${missing.join(', ')}`);
+  process.exit(1);
+}
 
 const app = express();
 const PORT = process.env.PORT ?? 3000;
 
-// Ensure uploads directory exists
-if (!fs.existsSync('uploads')) {
-  fs.mkdirSync('uploads');
+const uploadsDir = path.resolve(__dirname, '../uploads');
+if (!fs.existsSync(uploadsDir)) {
+  fs.mkdirSync(uploadsDir, { recursive: true });
 }
 
 app.use(cors());

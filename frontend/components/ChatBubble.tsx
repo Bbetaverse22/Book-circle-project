@@ -24,28 +24,36 @@ interface AgentBubbleProps {
 
 export function AgentBubble({ agent, text, isSpeaking }: AgentBubbleProps) {
   const pulseAnim = useRef(new Animated.Value(1)).current;
+  const bar1 = useRef(new Animated.Value(0.4)).current;
+  const bar2 = useRef(new Animated.Value(0.4)).current;
+  const bar3 = useRef(new Animated.Value(0.4)).current;
 
   useEffect(() => {
     if (isSpeaking) {
       Animated.loop(
         Animated.sequence([
-          Animated.timing(pulseAnim, {
-            toValue: 1.15,
-            duration: 500,
-            useNativeDriver: true,
-          }),
-          Animated.timing(pulseAnim, {
-            toValue: 1,
-            duration: 500,
-            useNativeDriver: true,
-          }),
+          Animated.timing(pulseAnim, { toValue: 1.15, duration: 500, useNativeDriver: true }),
+          Animated.timing(pulseAnim, { toValue: 1, duration: 500, useNativeDriver: true }),
         ]),
       ).start();
+
+      const makeBarLoop = (anim: Animated.Value, delay: number) =>
+        Animated.loop(
+          Animated.sequence([
+            Animated.delay(delay),
+            Animated.timing(anim, { toValue: 1, duration: 300, useNativeDriver: true }),
+            Animated.timing(anim, { toValue: 0.4, duration: 300, useNativeDriver: true }),
+          ]),
+        );
+      makeBarLoop(bar1, 0).start();
+      makeBarLoop(bar2, 150).start();
+      makeBarLoop(bar3, 300).start();
     } else {
       pulseAnim.stopAnimation();
       pulseAnim.setValue(1);
+      [bar1, bar2, bar3].forEach((b) => { b.stopAnimation(); b.setValue(0.4); });
     }
-  }, [isSpeaking, pulseAnim]);
+  }, [isSpeaking, pulseAnim, bar1, bar2, bar3]);
 
   return (
     <View style={styles.agentBubbleWrapper}>
@@ -75,7 +83,19 @@ export function AgentBubble({ agent, text, isSpeaking }: AgentBubbleProps) {
 
         {/* Message bubble */}
         <View style={[styles.agentBubble, { borderLeftColor: agent.color }]}>
-          {/* Transcript shown below audio indicator */}
+          {isSpeaking && (
+            <View style={styles.waveform}>
+              {[bar1, bar2, bar3].map((anim, i) => (
+                <Animated.View
+                  key={i}
+                  style={[
+                    styles.waveBar,
+                    { backgroundColor: agent.color, transform: [{ scaleY: anim }] },
+                  ]}
+                />
+              ))}
+            </View>
+          )}
           <Text style={styles.agentText}>{text}</Text>
         </View>
       </View>
@@ -158,5 +178,17 @@ const styles = StyleSheet.create({
     color: '#e0e0e0',
     fontSize: 15,
     lineHeight: 20,
+  },
+  waveform: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 3,
+    marginBottom: 6,
+    height: 20,
+  },
+  waveBar: {
+    width: 3,
+    height: 16,
+    borderRadius: 2,
   },
 });

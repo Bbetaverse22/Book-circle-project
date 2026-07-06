@@ -3,12 +3,16 @@ import OpenAI from 'openai';
 import { ElevenLabsClient } from 'elevenlabs';
 import multer from 'multer';
 import fs from 'fs';
+import path from 'path';
 
 const router = Router();
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 const elevenlabs = new ElevenLabsClient({ apiKey: process.env.ELEVENLABS_API_KEY });
-const upload = multer({ dest: 'uploads/' });
+const upload = multer({
+  dest: path.resolve(__dirname, '../../uploads'),
+  limits: { fileSize: 25 * 1024 * 1024 },
+});
 
 // POST /voice/transcribe
 // Receives audio file, returns transcribed text via OpenAI Whisper
@@ -38,7 +42,7 @@ router.post(
 );
 
 // POST /voice/synthesize
-// Receives { text, voiceId }, streams back audio/mpeg via ElevenLabs
+// Receives { text, voiceId }, returns { audio: base64 } JSON
 router.post('/synthesize', async (req: Request, res: Response) => {
   const { text, voiceId } = req.body as { text: string; voiceId: string };
   if (!text || !voiceId) {
@@ -46,13 +50,15 @@ router.post('/synthesize', async (req: Request, res: Response) => {
     return;
   }
   try {
-    const audio = await elevenlabs.generate({
-      voice: voiceId,
+    const stream = await elevenlabs.textToSpeech.convert(voiceId, {
       text,
       model_id: 'eleven_multilingual_v2',
     });
-    res.setHeader('Content-Type', 'audio/mpeg');
-    audio.pipe(res);
+    const chunks: Buffer[] = [];
+    for await (const chunk of stream) {
+      chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+    }
+    res.json({ audio: Buffer.concat(chunks).toString('base64') });
   } catch (error) {
     console.error('Voice synthesis error:', error);
     res.status(500).json({ error: 'Voice synthesis failed' });

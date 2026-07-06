@@ -42,26 +42,10 @@ async function playAgentVoice(text: string, voiceId: string): Promise<void> {
 
   if (!response.ok) return;
 
-  // Convert the streamed audio/mpeg response to base64 and write to cache
-  const blob = await response.blob();
+  const { audio } = (await response.json()) as { audio: string };
   const audioUri = `${FileSystem.cacheDirectory}agent_${Date.now()}.mp3`;
-
-  await new Promise<void>((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onloadend = async () => {
-      try {
-        const dataUrl = reader.result as string;
-        const base64 = dataUrl.split(',')[1];
-        await FileSystem.writeAsStringAsync(audioUri, base64, {
-          encoding: FileSystem.EncodingType.Base64,
-        });
-        resolve();
-      } catch (e) {
-        reject(e);
-      }
-    };
-    reader.onerror = reject;
-    reader.readAsDataURL(blob);
+  await FileSystem.writeAsStringAsync(audioUri, audio, {
+    encoding: FileSystem.EncodingType.Base64,
   });
 
   // Play the audio file and await completion
@@ -106,7 +90,6 @@ export default function ChatScreen() {
   React.useLayoutEffect(() => {
     navigation.setOptions({
       headerTitle: bookTitle ?? 'Book Club',
-      headerSubtitle: bookAuthor,
     });
   }, [navigation, bookTitle, bookAuthor]);
 
@@ -219,7 +202,7 @@ export default function ChatScreen() {
     }
     // Render each agent's response as its own bubble
     return (
-      <>
+      <View>
         {item.responses.map((response) => {
           const agent = AGENTS[response.agentId];
           if (!agent) return null;
@@ -232,7 +215,7 @@ export default function ChatScreen() {
             />
           );
         })}
-      </>
+      </View>
     );
   };
 
