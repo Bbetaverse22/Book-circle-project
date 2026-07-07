@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect } from 'react';
 import {
   FlatList,
   SafeAreaView,
@@ -10,6 +10,8 @@ import {
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { AGENT_LIST } from '../../constants/agents';
+import { ONBOARDING_KEY } from '../onboarding';
+import { kvGet } from '../../utils/kvStore';
 
 const BOOKS = [
   { id: '1', title: 'To Kill a Mockingbird', author: 'Harper Lee' },
@@ -21,6 +23,15 @@ const BOOKS = [
 
 export default function HomeScreen() {
   const router = useRouter();
+
+  // First launch → show onboarding once.
+  useEffect(() => {
+    kvGet(ONBOARDING_KEY).then((seen) => {
+      if (!seen) {
+        router.replace('/onboarding');
+      }
+    });
+  }, [router]);
 
   return (
     <SafeAreaView style={styles.container}>

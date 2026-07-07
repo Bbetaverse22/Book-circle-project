@@ -16,6 +16,8 @@ export default function RootLayout() {
             headerTintColor: '#e0e0e0',
           }}
         />
+        <Stack.Screen name="onboarding" options={{ gestureEnabled: false }} />
+        <Stack.Screen name="paywall" options={{ presentation: 'modal' }} />
       </Stack>
     </>
   );

@@ -1,7 +1,7 @@
 import { Audio } from 'expo-av';
 import * as FileSystem from 'expo-file-system';
 
-import { API_URL } from '../constants/api';
+import { apiFetch } from '../constants/api';
 
 export async function unlockWebAudioPlayback(): Promise<void> {
   // No-op on native — expo-av does not need browser unlock.
@@ -12,7 +12,7 @@ export async function playAgentVoice(
   voiceId: string,
   agentId: string,
 ): Promise<void> {
-  const response = await fetch(`${API_URL}/voice/synthesize`, {
+  const response = await apiFetch('/voice/synthesize', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ text, voiceId, agentId }),

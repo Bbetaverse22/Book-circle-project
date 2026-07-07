@@ -1,6 +1,6 @@
 import { Alert } from 'react-native';
 
-import { API_URL } from '../constants/api';
+import { API_URL, apiFetch } from '../constants/api';
 
 export async function transcribeAudioBlob(
   blob: Blob,
@@ -9,7 +9,7 @@ export async function transcribeAudioBlob(
   const formData = new FormData();
   formData.append('audio', blob, filename);
 
-  const res = await fetch(`${API_URL}/voice/transcribe`, {
+  const res = await apiFetch('/voice/transcribe', {
     method: 'POST',
     body: formData,
   });

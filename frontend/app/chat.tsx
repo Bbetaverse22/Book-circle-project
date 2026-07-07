@@ -11,11 +11,11 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
-import { useLocalSearchParams, useNavigation } from 'expo-router';
+import { useLocalSearchParams, useNavigation, useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 
-import { AGENTS, AGENT_LIST, Agent } from '../constants/agents';
-import { API_URL } from '../constants/api';
+import { AGENTS } from '../constants/agents';
+import { apiFetch, LimitReachedError, UsageInfo } from '../constants/api';
 import { useVoiceRecorder } from '../hooks/useVoiceRecorder';
 import { AgentBubble, UserBubble } from '../components/ChatBubble';
 import { VoiceButton } from '../components/VoiceButton';
@@ -38,6 +38,7 @@ export default function ChatScreen() {
     bookAuthor: string;
   }>();
   const navigation = useNavigation();
+  const router = useRouter();
 
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [inputText, setInputText] = useState('');
@@ -45,6 +46,21 @@ export default function ChatScreen() {
   const [isMuted, setIsMuted] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [speakingAgentId, setSpeakingAgentId] = useState<string | null>(null);
+  const [usage, setUsage] = useState<UsageInfo | null>(null);
+
+  // Load current quota so the free-question counter is right from the start.
+  React.useEffect(() => {
+    apiFetch('/usage')
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data: { isSubscriber: boolean; questions: { used: number; limit: number; remaining: number } } | null) => {
+        if (data) {
+          setUsage({ ...data.questions, isSubscriber: data.isSubscriber });
+        }
+      })
+      .catch(() => {
+        // Backend unreachable — the send path surfaces its own error.
+      });
+  }, []);
 
   // Shared conversation history for all agents (user turns + last assistant turn)
   const conversationHistory = useRef<ConversationTurn[]>([]);
@@ -80,26 +96,57 @@ export default function ChatScreen() {
       const historyForRequest: ConversationTurn[] = [...conversationHistory.current];
 
       try {
-        // Fetch all agent responses in parallel
-        const agentResponsePromises = AGENT_LIST.map((agent: Agent) =>
-          fetch(`${API_URL}/agents/${agent.id}/message`, {
+        // One request — the backend fans out to all agents server-side.
+        let agentResponses: AgentResponse[];
+        try {
+          const res = await apiFetch('/club/ask', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
               text: trimmed,
               history: historyForRequest,
             }),
-          })
-            .then((r) => r.json())
-            .then((data: { reply: string; agentId: string }) => ({
-              agentId: agent.id,
-              text: data.reply ?? '',
-            }))
-            .catch(() => ({ agentId: agent.id, text: '…' })),
-        );
+          });
 
-        const agentResponses: AgentResponse[] =
-          await Promise.all(agentResponsePromises);
+          if (!res.ok) {
+            throw new Error(`Request failed (${res.status})`);
+          }
+
+          const data = (await res.json()) as {
+            responses: Array<{ agentId: string; text: string; error?: boolean }>;
+            usage?: UsageInfo & { category: string };
+          };
+
+          if (data.usage) {
+            setUsage({
+              used: data.usage.used,
+              limit: data.usage.limit,
+              remaining: data.usage.remaining,
+              isSubscriber: data.usage.isSubscriber,
+            });
+          }
+
+          agentResponses = data.responses
+            .filter((r) => !r.error && r.text)
+            .map((r) => ({ agentId: r.agentId, text: r.text }));
+        } catch (error) {
+          // Remove the optimistic user bubble so the question can be retried.
+          setMessages((prev) => prev.filter((m) => m.id !== userId));
+          setInputText(trimmed);
+
+          if (error instanceof LimitReachedError) {
+            if (error.usage) {
+              setUsage(error.usage);
+            }
+            router.push('/paywall');
+          } else {
+            Alert.alert(
+              'Could not reach the club',
+              'The book club is unavailable right now. Check your connection and try again.',
+            );
+          }
+          return;
+        }
 
         // Add agent response group bubble
         const groupId = `agents_${Date.now()}`;
@@ -152,7 +199,7 @@ export default function ChatScreen() {
         setIsLoading(false);
       }
     },
-    [isLoading, isMuted, isVoiceMode],
+    [isLoading, isMuted, isVoiceMode, router],
   );
 
   // ── Voice input handlers ────────────────────────────────────────────────
@@ -206,6 +253,18 @@ export default function ChatScreen() {
           {bookTitle}
         </Text>
         <Text style={styles.bookBannerAuthor}>{bookAuthor}</Text>
+        {usage && !usage.isSubscriber && (
+          <TouchableOpacity
+            style={styles.quotaChip}
+            onPress={() => router.push('/paywall')}
+          >
+            <Text style={styles.quotaChipText}>
+              {usage.remaining > 0
+                ? `${usage.remaining} free left today`
+                : 'Upgrade'}
+            </Text>
+          </TouchableOpacity>
+        )}
       </View>
 
       {/* Message list */}
@@ -352,6 +411,18 @@ const styles = StyleSheet.create({
   bookBannerAuthor: {
     color: '#888',
     fontSize: 12,
+  },
+  quotaChip: {
+    backgroundColor: '#2d2d44',
+    borderRadius: 10,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    marginLeft: 6,
+  },
+  quotaChipText: {
+    color: '#b3a7ff',
+    fontSize: 11,
+    fontWeight: '600',
   },
   messageList: {
     paddingVertical: 12,

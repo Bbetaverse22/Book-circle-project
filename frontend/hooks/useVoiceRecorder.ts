@@ -97,7 +97,7 @@ export function useVoiceRecorder() {
         let durationMs = 0;
         try {
           const status = await recording.getStatusAsync();
-          durationMs = status.isLoaded ? status.durationMillis : 0;
+          durationMs = status.durationMillis ?? 0;
         } catch {
           // Ignore status read errors and continue stopping.
         }

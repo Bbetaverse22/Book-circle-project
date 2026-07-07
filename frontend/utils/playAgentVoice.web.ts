@@ -1,4 +1,4 @@
-import { API_URL } from '../constants/api';
+import { apiFetch } from '../constants/api';
 import { playWebAudioBlob } from './webAudio';
 
 function base64ToBlob(base64: string, mimeType: string): Blob {
@@ -15,7 +15,7 @@ export async function playAgentVoice(
   voiceId: string,
   agentId: string,
 ): Promise<void> {
-  const response = await fetch(`${API_URL}/voice/synthesize`, {
+  const response = await apiFetch('/voice/synthesize', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ text, voiceId, agentId }),

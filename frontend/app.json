@@ -5,9 +5,16 @@
     "version": "1.0.0",
     "orientation": "portrait",
     "scheme": "bookcircle",
+    "icon": "./assets/icon.png",
     "userInterfaceStyle": "automatic",
+    "splash": {
+      "image": "./assets/splash.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#1a1a2e"
+    },
     "plugins": [
       "expo-router",
+      "expo-secure-store",
       [
         "expo-av",
         {
@@ -18,14 +25,19 @@
     ],
     "ios": {
       "supportsTablet": false,
-      "bundleIdentifier": "com.bookcircle.app"
+      "bundleIdentifier": "com.bookcircle.app",
+      "buildNumber": "1",
+      "infoPlist": {
+        "ITSAppUsesNonExemptEncryption": false
+      }
     },
     "android": {
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#1a1a2e"
       },
-      "package": "com.bookcircle.app"
+      "package": "com.bookcircle.app",
+      "versionCode": 1
     },
     "experiments": {
       "typedRoutes": true
