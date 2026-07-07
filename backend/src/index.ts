@@ -1,12 +1,10 @@
+import './env';
 import express from 'express';
 import cors from 'cors';
-import dotenv from 'dotenv';
 import voiceRoutes from './routes/voice';
 import agentRoutes from './routes/agents';
 import fs from 'fs';
 import path from 'path';
-
-dotenv.config();
 
 const REQUIRED_ENV_VARS = ['ANTHROPIC_API_KEY', 'OPENAI_API_KEY', 'ELEVENLABS_API_KEY'] as const;
 const missing = REQUIRED_ENV_VARS.filter((key) => !process.env[key]);

@@ -13,7 +13,8 @@
         {
           "microphonePermission": "BookCircle needs microphone access to record your voice for chat."
         }
-      ]
+      ],
+      "expo-font"
     ],
     "ios": {
       "supportsTablet": false,

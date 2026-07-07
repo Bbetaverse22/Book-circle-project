@@ -184,6 +184,7 @@ export default function ChatScreen() {
   // ── Voice input handlers ────────────────────────────────────────────────
 
   const handleMicPressIn = async () => {
+    if (isLoading || isRecording) return;
     await startRecording();
   };
 
