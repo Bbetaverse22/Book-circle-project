@@ -6,7 +6,7 @@ export interface Agent {
   color: string;
 }
 
-// Agent list mirrors backend prompts.ts — voiceId must be set to real ElevenLabs IDs
+// Voice IDs mirror backend/src/prompts.ts
 export const AGENTS: Record<string, Agent> = {
   james: {
     id: 'james',

@@ -1,5 +1,6 @@
 import React, { useCallback, useRef, useState } from 'react';
 import {
+  Alert,
   FlatList,
   KeyboardAvoidingView,
   Platform,
@@ -11,16 +12,14 @@ import {
   View,
 } from 'react-native';
 import { useLocalSearchParams, useNavigation } from 'expo-router';
-import { Audio } from 'expo-av';
-import * as FileSystem from 'expo-file-system';
 import { Ionicons } from '@expo/vector-icons';
 
 import { AGENTS, AGENT_LIST, Agent } from '../constants/agents';
+import { API_URL } from '../constants/api';
 import { useVoiceRecorder } from '../hooks/useVoiceRecorder';
 import { AgentBubble, UserBubble } from '../components/ChatBubble';
 import { VoiceButton } from '../components/VoiceButton';
-
-const API_URL = process.env.EXPO_PUBLIC_API_URL ?? 'http://localhost:3000';
+import { playAgentVoice, unlockWebAudioPlayback } from '../utils/playAgentVoice';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -30,39 +29,6 @@ type AgentGroupMessage = { id: string; type: 'agents'; responses: AgentResponse[
 type ChatMessage = UserMessage | AgentGroupMessage;
 
 type ConversationTurn = { role: 'user' | 'assistant'; content: string };
-
-// ── Audio helper ─────────────────────────────────────────────────────────────
-
-async function playAgentVoice(text: string, voiceId: string): Promise<void> {
-  const response = await fetch(`${API_URL}/voice/synthesize`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ text, voiceId }),
-  });
-
-  if (!response.ok) return;
-
-  const { audio } = (await response.json()) as { audio: string };
-  const audioUri = `${FileSystem.cacheDirectory}agent_${Date.now()}.mp3`;
-  await FileSystem.writeAsStringAsync(audioUri, audio, {
-    encoding: FileSystem.EncodingType.Base64,
-  });
-
-  // Play the audio file and await completion
-  const { sound } = await Audio.Sound.createAsync({ uri: audioUri });
-
-  await new Promise<void>((resolve) => {
-    sound.setOnPlaybackStatusUpdate((status) => {
-      if (status.isLoaded && status.didJustFinish) {
-        sound.unloadAsync().then(() =>
-          FileSystem.deleteAsync(audioUri, { idempotent: true }),
-        );
-        resolve();
-      }
-    });
-    sound.playAsync();
-  });
-}
 
 // ── Main Screen ───────────────────────────────────────────────────────────────
 
@@ -84,7 +50,7 @@ export default function ChatScreen() {
   const conversationHistory = useRef<ConversationTurn[]>([]);
   const flatListRef = useRef<FlatList>(null);
 
-  const { startRecording, stopAndTranscribe, isRecording } = useVoiceRecorder();
+  const { startRecording, stopAndTranscribe, isRecording, isProcessing } = useVoiceRecorder();
 
   // Set header subtitle to book title
   React.useLayoutEffect(() => {
@@ -160,39 +126,50 @@ export default function ChatScreen() {
           100,
         );
 
-        // Play voice responses in sequence (if voice mode and not muted)
-        if (!isMuted) {
+        // Play voice responses in sequence when voice mode is on and not muted
+        if (isVoiceMode && !isMuted) {
+          let voiceFailed = false;
           for (const response of agentResponses) {
             const agent = AGENTS[response.agentId];
             if (!agent) continue;
             setSpeakingAgentId(agent.id);
             try {
-              await playAgentVoice(response.text, agent.voiceId);
-            } catch {
-              // Voice playback failure is non-fatal
+              await playAgentVoice(response.text, agent.voiceId, agent.id);
+            } catch (error) {
+              voiceFailed = true;
+              console.error(`Voice playback failed for ${agent.name}:`, error);
             }
           }
           setSpeakingAgentId(null);
+          if (voiceFailed) {
+            Alert.alert(
+              'Voice playback issue',
+              'Some responses could not be played aloud. Check your browser volume and try again.',
+            );
+          }
         }
       } finally {
         setIsLoading(false);
       }
     },
-    [isLoading, isMuted],
+    [isLoading, isMuted, isVoiceMode],
   );
 
   // ── Voice input handlers ────────────────────────────────────────────────
 
-  const handleMicPressIn = async () => {
-    if (isLoading || isRecording) return;
-    await startRecording();
+  const handleMicPressIn = () => {
+    if (isLoading || isRecording || isProcessing) return;
+    void unlockWebAudioPlayback();
+    void startRecording();
   };
 
-  const handleMicPressOut = async () => {
-    const transcribed = await stopAndTranscribe();
-    if (transcribed) {
-      await sendMessage(transcribed);
-    }
+  const handleMicPressOut = () => {
+    if (isProcessing) return;
+    void stopAndTranscribe().then((transcribed) => {
+      if (transcribed) {
+        void sendMessage(transcribed);
+      }
+    });
   };
 
   // ── Render ──────────────────────────────────────────────────────────────
@@ -252,13 +229,15 @@ export default function ChatScreen() {
         }
       />
 
-      {/* Loading indicator */}
-      {isLoading && (
+      {/* Loading / voice processing indicator */}
+      {(isLoading || isProcessing) && (
         <View style={styles.loadingBar}>
           <Text style={styles.loadingText}>
-            {speakingAgentId
-              ? `${AGENTS[speakingAgentId]?.name ?? ''} is speaking…`
-              : 'Asking the club…'}
+            {isProcessing
+              ? 'Processing your voice…'
+              : speakingAgentId
+                ? `${AGENTS[speakingAgentId]?.name ?? ''} is speaking…`
+                : 'Asking the club…'}
           </Text>
         </View>
       )}
@@ -271,7 +250,15 @@ export default function ChatScreen() {
           {/* Voice / text mode toggle */}
           <TouchableOpacity
             style={styles.iconButton}
-            onPress={() => setIsVoiceMode((v) => !v)}
+            onPress={() => {
+              setIsVoiceMode((v) => {
+                const next = !v;
+                if (next) {
+                  void unlockWebAudioPlayback();
+                }
+                return next;
+              });
+            }}
           >
             <Ionicons
               name={isVoiceMode ? 'chatbubble-outline' : 'mic-outline'}
@@ -285,11 +272,16 @@ export default function ChatScreen() {
             <View style={styles.voiceCenter}>
               <VoiceButton
                 isRecording={isRecording}
+                disabled={isLoading || isProcessing}
                 onPressIn={handleMicPressIn}
                 onPressOut={handleMicPressOut}
               />
               <Text style={styles.voiceHint}>
-                {isRecording ? 'Release to send' : 'Hold to speak'}
+                {isProcessing
+                  ? 'Processing…'
+                  : isRecording
+                    ? 'Release to send'
+                    : 'Hold to speak'}
               </Text>
             </View>
           ) : (

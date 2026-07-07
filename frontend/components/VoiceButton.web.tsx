@@ -1,4 +1,4 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useCallback, useEffect, useRef } from 'react';
 import {
   Animated,
   Pressable,
@@ -22,10 +22,63 @@ export function VoiceButton({
 }: VoiceButtonProps) {
   const pulseAnim = useRef(new Animated.Value(1)).current;
   const pulseOpacity = useRef(new Animated.Value(0)).current;
+  const onPressInRef = useRef(onPressIn);
+  const onPressOutRef = useRef(onPressOut);
+  const isListeningRef = useRef(false);
+  const stopHandledRef = useRef(false);
+  const cleanupListenersRef = useRef<(() => void) | null>(null);
+
+  useEffect(() => {
+    onPressInRef.current = onPressIn;
+    onPressOutRef.current = onPressOut;
+  }, [onPressIn, onPressOut]);
+
+  const finishRecording = useCallback(() => {
+    if (!isListeningRef.current || stopHandledRef.current) return;
+    stopHandledRef.current = true;
+    isListeningRef.current = false;
+    cleanupListenersRef.current?.();
+    cleanupListenersRef.current = null;
+    onPressOutRef.current();
+  }, []);
+
+  const beginListening = useCallback(() => {
+    const handlePointerUp = () => finishRecording();
+
+    window.addEventListener('pointerup', handlePointerUp);
+    window.addEventListener('mouseup', handlePointerUp);
+    window.addEventListener('touchend', handlePointerUp);
+
+    return () => {
+      window.removeEventListener('pointerup', handlePointerUp);
+      window.removeEventListener('mouseup', handlePointerUp);
+      window.removeEventListener('touchend', handlePointerUp);
+    };
+  }, [finishRecording]);
+
+  const handlePressIn = useCallback(() => {
+    if (disabled) return;
+    stopHandledRef.current = false;
+    isListeningRef.current = true;
+    cleanupListenersRef.current?.();
+    cleanupListenersRef.current = beginListening();
+    onPressInRef.current();
+  }, [disabled, beginListening]);
+
+  useEffect(() => {
+    return () => {
+      cleanupListenersRef.current?.();
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!isRecording) {
+      isListeningRef.current = false;
+    }
+  }, [isRecording]);
 
   useEffect(() => {
     if (isRecording) {
-      // Pulsing red dot ring animation while recording
       Animated.loop(
         Animated.sequence([
           Animated.parallel([
@@ -64,11 +117,10 @@ export function VoiceButton({
   return (
     <Pressable
       disabled={disabled}
-      onPressIn={onPressIn}
-      onPressOut={onPressOut}
+      onPressIn={handlePressIn}
+      onPressOut={finishRecording}
       style={[styles.wrapper, disabled && styles.wrapperDisabled]}
     >
-      {/* Pulsing ring — visible while recording */}
       <Animated.View
         style={[
           styles.pulse,
