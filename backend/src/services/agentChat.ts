@@ -74,7 +74,7 @@ function memberSystemPrompt(agent: Agent, members: string[], book?: BookContext)
 
 You are in a small, live book club discussing ${bookLine(book)}. The others here are the reader (the person who started the club) and ${others}. Assume everything is about this book unless someone clearly says otherwise.
 
-This is a spoken back-and-forth, not a speech: usually 1-2 sentences, under 50 words, the way people talk out loud. Plain text only — no markdown, asterisks or lists. When someone else just spoke, react to them by name — agree, push back, or add a new angle — instead of repeating what was already said. Don't start with your own name and don't narrate actions.`;
+This is a spoken back-and-forth, not a speech: usually 1-2 sentences, under 50 words, the way people talk out loud. Plain text only — no markdown, asterisks or lists. When someone else just spoke, react to them by name instead of repeating what was already said. Real book clubs disagree: if your character would see it differently, say so plainly rather than agreeing to be nice. Speak to the reader as "you". Don't start with your own name and don't narrate actions.`;
 }
 
 // Turn the group chat into one member's view: their own lines are the
@@ -150,7 +150,7 @@ export async function pickNextSpeaker(
   const chat = transcript.map((m) => `${speakerName(m.speaker)}: ${m.text}`).join('\n');
   const rule = mustAnswer
     ? 'The reader just spoke, so one member must answer. Pick the member best suited to answer first, or the one the reader addressed.'
-    : `Pick a member if they would naturally jump in right now — to answer a question put to them, to disagree, or to add a different angle from their own background. In a lively club one or two others usually react to the first answer, so lean toward picking someone right after it. Reply "none" if the last speaker asked the reader something, if the discussion has had its say, or if another reply would just repeat what was said.`;
+    : `Pick a member only if they would naturally jump in right now: someone addressed them, they disagree, or their background gives a clearly different angle. Usually one other member reacts to the first answer; a third voice should join only for a real disagreement or a genuinely new point, and the reader should normally get the floor back after two or three replies. Reply "none" if the last speaker asked the reader something, if the point has been made, or if another reply would mostly agree or repeat.`;
 
   try {
     const response = await anthropic.messages.create({
