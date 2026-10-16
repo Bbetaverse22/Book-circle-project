@@ -1,16 +1,27 @@
 const SILENT_WAV =
   'data:audio/wav;base64,UklGRigAAABXQVZFZm10IBIAAAABAAEARKwAAIhYAQACABAAZGF0YQQAAAAAAA==';
 
-let unlocked = false;
+// iOS Safari only lets an <audio> element play without a fresh tap if that
+// same element was started during an earlier tap. So every clip reuses one
+// shared element, which unlockWebAudioPlayback() starts inside the tap.
+let sharedElement: HTMLAudioElement | null = null;
 
+function getSharedElement(): HTMLAudioElement {
+  if (!sharedElement) {
+    sharedElement = new Audio();
+    sharedElement.setAttribute('playsinline', 'true');
+  }
+  return sharedElement;
+}
+
+// Call synchronously from a tap/press handler, before any await.
 export async function unlockWebAudioPlayback(): Promise<void> {
-  if (unlocked || typeof window === 'undefined') return;
+  if (typeof window === 'undefined') return;
 
-  const audio = new Audio(SILENT_WAV);
-  audio.volume = 0.01;
+  const element = getSharedElement();
+  element.src = SILENT_WAV;
   try {
-    await audio.play();
-    unlocked = true;
+    await element.play();
   } catch {
     // Browser may still allow later playback after explicit interaction.
   }
@@ -18,25 +29,19 @@ export async function unlockWebAudioPlayback(): Promise<void> {
 
 export async function playWebAudioBlob(blob: Blob): Promise<void> {
   const url = URL.createObjectURL(blob);
+  const element = getSharedElement();
 
   try {
-    const element = new Audio(url);
-    element.volume = 1;
-    await element.play();
     await new Promise<void>((resolve, reject) => {
       element.onended = () => resolve();
       element.onerror = () => reject(new Error('Voice playback failed'));
-    });
-  } catch (error) {
-    await unlockWebAudioPlayback();
-    const retryElement = new Audio(url);
-    retryElement.volume = 1;
-    await retryElement.play();
-    await new Promise<void>((resolve, reject) => {
-      retryElement.onended = () => resolve();
-      retryElement.onerror = () => reject(new Error('Voice playback failed'));
+      element.src = url;
+      element.volume = 1;
+      element.play().catch(reject);
     });
   } finally {
+    element.onended = null;
+    element.onerror = null;
     URL.revokeObjectURL(url);
   }
 }

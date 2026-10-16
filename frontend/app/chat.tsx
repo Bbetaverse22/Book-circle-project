@@ -105,6 +105,7 @@ export default function ChatScreen() {
             body: JSON.stringify({
               text: trimmed,
               history: historyForRequest,
+              book: bookTitle ? { title: bookTitle, author: bookAuthor } : undefined,
             }),
           });
 
@@ -199,7 +200,7 @@ export default function ChatScreen() {
         setIsLoading(false);
       }
     },
-    [isLoading, isMuted, isVoiceMode, router],
+    [bookAuthor, bookTitle, isLoading, isMuted, isVoiceMode, router],
   );
 
   // ── Voice input handlers ────────────────────────────────────────────────
@@ -212,7 +213,7 @@ export default function ChatScreen() {
 
   const handleMicPressOut = () => {
     if (isProcessing) return;
-    void stopAndTranscribe().then((transcribed) => {
+    void stopAndTranscribe({ title: bookTitle, author: bookAuthor }).then((transcribed) => {
       if (transcribed) {
         void sendMessage(transcribed);
       }
@@ -352,7 +353,10 @@ export default function ChatScreen() {
               placeholderTextColor="#555"
               multiline
               returnKeyType="send"
-              onSubmitEditing={() => sendMessage(inputText)}
+              onSubmitEditing={() => {
+                void unlockWebAudioPlayback();
+                void sendMessage(inputText);
+              }}
             />
           )}
 
@@ -375,7 +379,10 @@ export default function ChatScreen() {
                 styles.sendButton,
                 !inputText.trim() && styles.sendButtonDisabled,
               ]}
-              onPress={() => sendMessage(inputText)}
+              onPress={() => {
+                void unlockWebAudioPlayback();
+                void sendMessage(inputText);
+              }}
               disabled={!inputText.trim() || isLoading}
             >
               <Ionicons name="arrow-up" size={20} color="#fff" />

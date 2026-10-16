@@ -2,7 +2,7 @@ import { Router, Request, Response, NextFunction } from 'express';
 import { AGENT_LIST } from '../prompts';
 import { MAX_QUESTION_CHARS } from '../config';
 import { usageLimit } from '../middleware/usageLimit';
-import { getAgentReply, sanitizeHistory } from '../services/agentChat';
+import { getAgentReply, sanitizeBook, sanitizeHistory } from '../services/agentChat';
 
 const router = Router();
 
@@ -23,19 +23,20 @@ function validateAsk(req: Request, res: Response, next: NextFunction): void {
 }
 
 // POST /club/ask
-// Body: { text: string, history?: ConversationTurn[] }
+// Body: { text: string, history?: ConversationTurn[], book?: { title, author? } }
 // Fans the question out to all agents server-side and returns every reply.
 // One request = one "question" against the device's daily quota, which makes
 // usage accounting airtight (no way to spend quota per-agent).
 router.post('/ask', validateAsk, usageLimit('questions'), async (req: Request, res: Response) => {
-  const { text, history } = req.body as { text: string; history?: unknown };
+  const { text, history, book } = req.body as { text: string; history?: unknown; book?: unknown };
 
   const cleanHistory = sanitizeHistory(history);
+  const cleanBook = sanitizeBook(book);
 
   const responses = await Promise.all(
     AGENT_LIST.map(async (agent) => {
       try {
-        const reply = await getAgentReply(agent, text.trim(), cleanHistory);
+        const reply = await getAgentReply(agent, text.trim(), cleanHistory, cleanBook);
         return { agentId: agent.id, text: reply };
       } catch (error) {
         console.error(`Agent ${agent.id} response error:`, error);

@@ -5,6 +5,7 @@ import { Audio } from 'expo-av';
 import { createMutex } from '../utils/recordingMutex';
 import {
   alertTranscriptionConnectionError,
+  BookHint,
   transcribeAudioBlob,
 } from '../utils/transcribeAudio';
 
@@ -83,7 +84,7 @@ export function useVoiceRecorder() {
     });
   }, [releaseActiveRecording]);
 
-  const stopAndTranscribe = useCallback(async (): Promise<string> => {
+  const stopAndTranscribe = useCallback(async (book?: BookHint): Promise<string> => {
     const withLock = withLockRef.current;
 
     setIsProcessing(true);
@@ -127,7 +128,7 @@ export function useVoiceRecorder() {
 
       const blob = await blobFromUri(captured.uri);
       const filename = Platform.OS === 'web' ? 'speech.webm' : 'speech.m4a';
-      return await transcribeAudioBlob(blob, filename);
+      return await transcribeAudioBlob(blob, filename, book);
     } catch (error) {
       alertTranscriptionConnectionError(error);
       return '';

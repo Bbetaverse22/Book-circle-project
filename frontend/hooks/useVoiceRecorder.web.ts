@@ -4,6 +4,7 @@ import { Alert } from 'react-native';
 import { createMutex } from '../utils/recordingMutex';
 import {
   alertTranscriptionConnectionError,
+  BookHint,
   transcribeAudioBlob,
 } from '../utils/transcribeAudio';
 
@@ -107,7 +108,7 @@ export function useVoiceRecorder() {
     });
   }, [releaseActiveRecording]);
 
-  const stopAndTranscribe = useCallback(async (): Promise<string> => {
+  const stopAndTranscribe = useCallback(async (book?: BookHint): Promise<string> => {
     const withLock = withLockRef.current;
 
     setIsProcessing(true);
@@ -159,7 +160,7 @@ export function useVoiceRecorder() {
       }
 
       const filename = `speech.${extensionForMimeType(blob.type || mimeTypeRef.current)}`;
-      return await transcribeAudioBlob(blob, filename);
+      return await transcribeAudioBlob(blob, filename, book);
     } catch (error) {
       alertTranscriptionConnectionError(error);
       return '';

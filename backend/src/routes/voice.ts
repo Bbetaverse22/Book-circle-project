@@ -7,6 +7,7 @@ import path from 'path';
 import { AGENT_LIST } from '../prompts';
 import { MAX_TTS_CHARS } from '../config';
 import { usageLimit } from '../middleware/usageLimit';
+import { sanitizeBook } from '../services/agentChat';
 
 const router = Router();
 
@@ -29,7 +30,9 @@ const upload = multer({
 const ALLOWED_VOICE_IDS = new Set(AGENT_LIST.map((a) => a.voiceId));
 
 // POST /voice/transcribe
-// Receives audio file, returns transcribed text via OpenAI Whisper
+// Receives audio file (plus optional bookTitle/bookAuthor fields), returns
+// transcribed text via OpenAI Whisper. The book is passed as a Whisper prompt
+// so titles and character names are spelled correctly.
 router.post(
   '/transcribe',
   usageLimit('transcribe'),
@@ -39,10 +42,15 @@ router.post(
       res.status(400).json({ error: 'No audio file provided' });
       return;
     }
+    const { bookTitle, bookAuthor } = req.body as { bookTitle?: unknown; bookAuthor?: unknown };
+    const book = sanitizeBook({ title: bookTitle, author: bookAuthor });
     try {
       const transcription = await openai.audio.transcriptions.create({
         file: fs.createReadStream(req.file.path),
         model: 'whisper-1',
+        ...(book && {
+          prompt: `A book club discussion about "${book.title}"${book.author ? ` by ${book.author}` : ''}.`,
+        }),
       });
       fs.unlinkSync(req.file.path);
       res.json({ text: transcription.text });

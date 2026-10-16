@@ -2,11 +2,17 @@ import { Alert } from 'react-native';
 
 import { API_URL, apiFetch } from '../constants/api';
 
+export type BookHint = { title?: string; author?: string };
+
 export async function transcribeAudioBlob(
   blob: Blob,
   filename: string,
+  book?: BookHint,
 ): Promise<string> {
   const formData = new FormData();
+  // Text fields go before the file so the server sees them while parsing.
+  if (book?.title) formData.append('bookTitle', book.title);
+  if (book?.author) formData.append('bookAuthor', book.author);
   formData.append('audio', blob, filename);
 
   const res = await apiFetch('/voice/transcribe', {
