@@ -1,4 +1,4 @@
-import React, { useCallback, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Alert,
   FlatList,
@@ -19,37 +19,68 @@ import { apiFetch, LimitReachedError, UsageInfo } from '../constants/api';
 import { useVoiceRecorder } from '../hooks/useVoiceRecorder';
 import { AgentBubble, UserBubble } from '../components/ChatBubble';
 import { VoiceButton } from '../components/VoiceButton';
-import { playAgentVoice, unlockWebAudioPlayback } from '../utils/playAgentVoice';
+import {
+  playAgentVoice,
+  stopAgentVoice,
+  unlockWebAudioPlayback,
+} from '../utils/playAgentVoice';
+import { CLUB_SIZE } from '../utils/clubMembers';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
-type UserMessage = { id: string; type: 'user'; text: string };
-type AgentResponse = { agentId: string; text: string };
-type AgentGroupMessage = { id: string; type: 'agents'; responses: AgentResponse[] };
-type ChatMessage = UserMessage | AgentGroupMessage;
+// One line of the group chat; `speaker` is 'user' or a member id.
+type ClubLine = { speaker: string; text: string };
+type ChatMessage = ClubLine & { id: string };
 
-type ConversationTurn = { role: 'user' | 'assistant'; content: string };
+// Follow-up replies after the first answer (the backend enforces the same cap).
+const MAX_FOLLOWUPS = 3;
 
 // ── Main Screen ───────────────────────────────────────────────────────────────
 
 export default function ChatScreen() {
-  const { bookTitle, bookAuthor } = useLocalSearchParams<{
+  const { bookTitle, bookAuthor, members } = useLocalSearchParams<{
     bookTitle: string;
     bookAuthor: string;
+    members: string;
   }>();
   const navigation = useNavigation();
   const router = useRouter();
+
+  const memberIds = useMemo(
+    () => (members ?? '').split(',').filter((id) => AGENTS[id]),
+    [members],
+  );
 
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [inputText, setInputText] = useState('');
   const [isVoiceMode, setIsVoiceMode] = useState(false);
   const [isMuted, setIsMuted] = useState(false);
-  const [isLoading, setIsLoading] = useState(false);
+  // Waiting for the first answer to the reader's message.
+  const [isAsking, setIsAsking] = useState(false);
+  // Waiting to hear whether another member wants to add something.
+  const [isWaitingForMore, setIsWaitingForMore] = useState(false);
   const [speakingAgentId, setSpeakingAgentId] = useState<string | null>(null);
   const [usage, setUsage] = useState<UsageInfo | null>(null);
 
+  // What the backend sees: the whole group chat so far.
+  const transcript = useRef<ClubLine[]>([]);
+  // Bumped whenever the reader speaks; stale follow-up loops check it and stop.
+  const round = useRef(0);
+  const isMutedRef = useRef(isMuted);
+  const voiceAlertShown = useRef(false);
+  const flatListRef = useRef<FlatList>(null);
+
+  const { startRecording, stopAndTranscribe, isRecording, isProcessing } = useVoiceRecorder();
+
+  // Without a full club (e.g. an old link), go pick members first.
+  useEffect(() => {
+    if (memberIds.length !== CLUB_SIZE) {
+      router.replace({ pathname: '/members', params: { bookTitle, bookAuthor } });
+    }
+  }, [memberIds, router, bookTitle, bookAuthor]);
+
   // Load current quota so the free-question counter is right from the start.
-  React.useEffect(() => {
+  useEffect(() => {
     apiFetch('/usage')
       .then((res) => (res.ok ? res.json() : null))
       .then((data: { isSubscriber: boolean; questions: { used: number; limit: number; remaining: number } } | null) => {
@@ -62,151 +93,197 @@ export default function ChatScreen() {
       });
   }, []);
 
-  // Shared conversation history for all agents (user turns + last assistant turn)
-  const conversationHistory = useRef<ConversationTurn[]>([]);
-  const flatListRef = useRef<FlatList>(null);
-
-  const { startRecording, stopAndTranscribe, isRecording, isProcessing } = useVoiceRecorder();
-
-  // Set header subtitle to book title
-  React.useLayoutEffect(() => {
+  useEffect(() => {
     navigation.setOptions({
       headerTitle: bookTitle ?? 'Book Club',
     });
-  }, [navigation, bookTitle, bookAuthor]);
+  }, [navigation, bookTitle]);
 
-  // ── Send message to all agents ──────────────────────────────────────────
+  // Stop talking when the reader leaves the screen.
+  useEffect(
+    () => () => {
+      round.current += 1;
+      stopAgentVoice();
+    },
+    [],
+  );
+
+  const clubBody = (lines: ClubLine[]) => ({
+    members: memberIds,
+    book: bookTitle ? { title: bookTitle, author: bookAuthor } : undefined,
+    transcript: lines,
+  });
+
+  const addLine = (line: ClubLine) => {
+    transcript.current = [...transcript.current, line];
+    setMessages((prev) => [
+      ...prev,
+      { ...line, id: `${line.speaker}_${Date.now()}_${prev.length}` },
+    ]);
+    setTimeout(() => flatListRef.current?.scrollToEnd({ animated: true }), 100);
+  };
+
+  // Stop whatever the club is doing so the reader can take the floor.
+  const interrupt = () => {
+    round.current += 1;
+    stopAgentVoice();
+    setSpeakingAgentId(null);
+    setIsWaitingForMore(false);
+  };
+
+  const speak = async (line: ClubLine, myRound: number) => {
+    const agent = AGENTS[line.speaker];
+    if (!agent || isMutedRef.current || myRound !== round.current) return;
+    setSpeakingAgentId(agent.id);
+    try {
+      await playAgentVoice(line.text, agent.voiceId, agent.id);
+    } catch (error) {
+      console.error(`Voice playback failed for ${agent.name}:`, error);
+      if (!voiceAlertShown.current) {
+        voiceAlertShown.current = true;
+        Alert.alert(
+          'Voice playback issue',
+          'Some replies could not be played aloud. Check your volume and try again.',
+        );
+      }
+    } finally {
+      if (myRound === round.current) setSpeakingAgentId(null);
+    }
+  };
+
+  // Ask whether another member wants to add something. null = floor goes back
+  // to the reader (including when the daily follow-up allowance is used up).
+  const fetchFollowup = async (lines: ClubLine[]): Promise<ClubLine | null> => {
+    try {
+      const res = await apiFetch('/club/followup', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(clubBody(lines)),
+      });
+      if (!res.ok) return null;
+      const data = (await res.json()) as { message?: ClubLine; done?: boolean };
+      return data.message ?? null;
+    } catch {
+      return null;
+    }
+  };
+
+  // After the first answer: speak it, and while it plays find out whether
+  // someone else jumps in. Repeat until the floor goes back to the reader.
+  const continueDiscussion = async (first: ClubLine, myRound: number) => {
+    let line = first;
+    for (let i = 0; i < MAX_FOLLOWUPS; i += 1) {
+      const next = fetchFollowup(transcript.current);
+      await speak(line, myRound);
+      if (myRound !== round.current) return;
+      setIsWaitingForMore(true);
+      const followup = await next;
+      if (myRound !== round.current) return;
+      setIsWaitingForMore(false);
+      if (!followup) return;
+      addLine(followup);
+      line = followup;
+    }
+    await speak(line, myRound);
+  };
 
   const sendMessage = useCallback(
     async (text: string) => {
       const trimmed = text.trim();
-      if (!trimmed || isLoading) return;
+      if (!trimmed || isAsking) return;
 
+      interrupt();
+      const myRound = round.current;
       setInputText('');
-      setIsLoading(true);
+      setIsAsking(true);
 
-      // Add user bubble immediately
-      const userId = `user_${Date.now()}`;
-      setMessages((prev) => [
-        ...prev,
-        { id: userId, type: 'user', text: trimmed },
-      ]);
+      const history = transcript.current;
+      addLine({ speaker: 'user', text: trimmed });
 
-      // Build history for this request
-      const historyForRequest: ConversationTurn[] = [...conversationHistory.current];
-
+      let first: ClubLine;
       try {
-        // One request — the backend fans out to all agents server-side.
-        let agentResponses: AgentResponse[];
-        try {
-          const res = await apiFetch('/club/ask', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              text: trimmed,
-              history: historyForRequest,
-              book: bookTitle ? { title: bookTitle, author: bookAuthor } : undefined,
-            }),
+        const res = await apiFetch('/club/ask', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ ...clubBody(history), text: trimmed }),
+        });
+
+        if (!res.ok) {
+          throw new Error(`Request failed (${res.status})`);
+        }
+
+        const data = (await res.json()) as {
+          message: ClubLine;
+          usage?: UsageInfo & { category: string };
+        };
+
+        if (data.usage) {
+          setUsage({
+            used: data.usage.used,
+            limit: data.usage.limit,
+            remaining: data.usage.remaining,
+            isSubscriber: data.usage.isSubscriber,
           });
-
-          if (!res.ok) {
-            throw new Error(`Request failed (${res.status})`);
-          }
-
-          const data = (await res.json()) as {
-            responses: Array<{ agentId: string; text: string; error?: boolean }>;
-            usage?: UsageInfo & { category: string };
-          };
-
-          if (data.usage) {
-            setUsage({
-              used: data.usage.used,
-              limit: data.usage.limit,
-              remaining: data.usage.remaining,
-              isSubscriber: data.usage.isSubscriber,
-            });
-          }
-
-          agentResponses = data.responses
-            .filter((r) => !r.error && r.text)
-            .map((r) => ({ agentId: r.agentId, text: r.text }));
-        } catch (error) {
-          // Remove the optimistic user bubble so the question can be retried.
-          setMessages((prev) => prev.filter((m) => m.id !== userId));
-          setInputText(trimmed);
-
-          if (error instanceof LimitReachedError) {
-            if (error.usage) {
-              setUsage(error.usage);
-            }
-            router.push('/paywall');
-          } else {
-            Alert.alert(
-              'Could not reach the club',
-              'The book club is unavailable right now. Check your connection and try again.',
-            );
-          }
-          return;
         }
-
-        // Add agent response group bubble
-        const groupId = `agents_${Date.now()}`;
-        setMessages((prev) => [
-          ...prev,
-          { id: groupId, type: 'agents', responses: agentResponses },
-        ]);
-
-        // Update shared history: user turn + summarised agent turn
-        conversationHistory.current = [
-          ...historyForRequest,
-          { role: 'user', content: trimmed },
-          {
-            role: 'assistant',
-            content: agentResponses
-              .map((r) => `${AGENTS[r.agentId]?.name ?? r.agentId}: ${r.text}`)
-              .join('\n'),
-          },
-        ];
-
-        // Scroll to bottom
-        setTimeout(
-          () => flatListRef.current?.scrollToEnd({ animated: true }),
-          100,
-        );
-
-        // Play voice responses in sequence when voice mode is on and not muted
-        if (isVoiceMode && !isMuted) {
-          let voiceFailed = false;
-          for (const response of agentResponses) {
-            const agent = AGENTS[response.agentId];
-            if (!agent) continue;
-            setSpeakingAgentId(agent.id);
-            try {
-              await playAgentVoice(response.text, agent.voiceId, agent.id);
-            } catch (error) {
-              voiceFailed = true;
-              console.error(`Voice playback failed for ${agent.name}:`, error);
-            }
-          }
-          setSpeakingAgentId(null);
-          if (voiceFailed) {
-            Alert.alert(
-              'Voice playback issue',
-              'Some responses could not be played aloud. Check your browser volume and try again.',
-            );
-          }
+        if (!data.message?.text) {
+          throw new Error('Empty reply');
         }
+        first = data.message;
+      } catch (error) {
+        // Take the reader's message back out so it can be retried.
+        transcript.current = history;
+        setMessages((prev) => prev.slice(0, -1));
+        setInputText(trimmed);
+
+        if (error instanceof LimitReachedError) {
+          if (error.usage) {
+            setUsage(error.usage);
+          }
+          router.push('/paywall');
+        } else {
+          Alert.alert(
+            'Could not reach the club',
+            'The book club is unavailable right now. Check your connection and try again.',
+          );
+        }
+        return;
       } finally {
-        setIsLoading(false);
+        setIsAsking(false);
       }
+
+      if (myRound !== round.current) return;
+      addLine(first);
+      await continueDiscussion(first, myRound);
     },
-    [bookAuthor, bookTitle, isLoading, isMuted, isVoiceMode, router],
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [isAsking, memberIds, bookTitle, bookAuthor, router],
   );
+
+  const toggleMute = () => {
+    setIsMuted((muted) => {
+      const next = !muted;
+      isMutedRef.current = next;
+      if (next) {
+        stopAgentVoice();
+        setSpeakingAgentId(null);
+      } else {
+        void unlockWebAudioPlayback();
+      }
+      return next;
+    });
+  };
+
+  const sendTyped = () => {
+    interrupt();
+    void unlockWebAudioPlayback();
+    void sendMessage(inputText);
+  };
 
   // ── Voice input handlers ────────────────────────────────────────────────
 
   const handleMicPressIn = () => {
-    if (isLoading || isRecording || isProcessing) return;
+    if (isAsking || isRecording || isProcessing) return;
+    interrupt();
     void unlockWebAudioPlayback();
     void startRecording();
   };
@@ -222,38 +299,61 @@ export default function ChatScreen() {
 
   // ── Render ──────────────────────────────────────────────────────────────
 
+  const club = memberIds.map((id) => AGENTS[id]);
+  const clubNames =
+    club.length === CLUB_SIZE
+      ? `${club[0].name}, ${club[1].name} and ${club[2].name}`
+      : 'Your club';
+
+  // A member speaks their latest line, so only that bubble animates.
+  const speakingMessageId = speakingAgentId
+    ? [...messages].reverse().find((m) => m.speaker === speakingAgentId)?.id
+    : undefined;
+
   const renderMessage = ({ item }: { item: ChatMessage }) => {
-    if (item.type === 'user') {
+    if (item.speaker === 'user') {
       return <UserBubble text={item.text} />;
     }
-    // Render each agent's response as its own bubble
+    const agent = AGENTS[item.speaker];
+    if (!agent) return null;
     return (
-      <View>
-        {item.responses.map((response) => {
-          const agent = AGENTS[response.agentId];
-          if (!agent) return null;
-          return (
-            <AgentBubble
-              key={response.agentId}
-              agent={agent}
-              text={response.text}
-              isSpeaking={speakingAgentId === response.agentId}
-            />
-          );
-        })}
-      </View>
+      <AgentBubble
+        agent={agent}
+        text={item.text}
+        isSpeaking={item.id === speakingMessageId}
+      />
     );
   };
 
+  const typingLabel = isProcessing
+    ? 'Listening to you…'
+    : isAsking
+      ? 'The club is thinking…'
+      : isWaitingForMore && !speakingAgentId
+        ? 'Anyone want to add something?'
+        : null;
+
   return (
     <SafeAreaView style={styles.container}>
-      {/* Book info banner */}
+      {/* Club banner: who's here + quota */}
       <View style={styles.bookBanner}>
-        <Ionicons name="book" size={16} color="#7c6af7" />
+        <View style={styles.clubAvatars}>
+          {club.map((agent, i) => (
+            <View
+              key={agent.id}
+              style={[
+                styles.clubAvatar,
+                { backgroundColor: agent.color, marginLeft: i === 0 ? 0 : -8 },
+                speakingAgentId === agent.id && styles.clubAvatarSpeaking,
+              ]}
+            >
+              <Text style={styles.clubAvatarInitial}>{agent.name.charAt(0)}</Text>
+            </View>
+          ))}
+        </View>
         <Text style={styles.bookBannerTitle} numberOfLines={1}>
-          {bookTitle}
+          {speakingAgentId ? `${AGENTS[speakingAgentId].name} is speaking…` : clubNames}
         </Text>
-        <Text style={styles.bookBannerAuthor}>{bookAuthor}</Text>
         {usage && !usage.isSubscriber && (
           <TouchableOpacity
             style={styles.quotaChip}
@@ -275,32 +375,31 @@ export default function ChatScreen() {
         keyExtractor={(m) => m.id}
         renderItem={renderMessage}
         contentContainerStyle={styles.messageList}
+        onContentSizeChange={() => flatListRef.current?.scrollToEnd({ animated: true })}
         ListEmptyComponent={
           <View style={styles.emptyState}>
             <Text style={styles.emptyEmoji}>💬</Text>
             <Text style={styles.emptyText}>
-              Ask the club something about{' '}
+              Start the conversation about{' '}
               <Text style={styles.emptyBold}>{bookTitle}</Text>
             </Text>
             <Text style={styles.emptySubtext}>
-              All 7 members will respond in their own voice.
+              {clubNames} are here. Ask anything — whoever has the most to say
+              will answer first, and the others can jump in.
             </Text>
           </View>
         }
+        ListFooterComponent={
+          typingLabel ? (
+            <View style={styles.typingRow}>
+              <View style={styles.typingBubble}>
+                <Text style={styles.typingDots}>• • •</Text>
+              </View>
+              <Text style={styles.typingText}>{typingLabel}</Text>
+            </View>
+          ) : null
+        }
       />
-
-      {/* Loading / voice processing indicator */}
-      {(isLoading || isProcessing) && (
-        <View style={styles.loadingBar}>
-          <Text style={styles.loadingText}>
-            {isProcessing
-              ? 'Processing your voice…'
-              : speakingAgentId
-                ? `${AGENTS[speakingAgentId]?.name ?? ''} is speaking…`
-                : 'Asking the club…'}
-          </Text>
-        </View>
-      )}
 
       {/* Input bar */}
       <KeyboardAvoidingView
@@ -311,13 +410,8 @@ export default function ChatScreen() {
           <TouchableOpacity
             style={styles.iconButton}
             onPress={() => {
-              setIsVoiceMode((v) => {
-                const next = !v;
-                if (next) {
-                  void unlockWebAudioPlayback();
-                }
-                return next;
-              });
+              void unlockWebAudioPlayback();
+              setIsVoiceMode((v) => !v);
             }}
           >
             <Ionicons
@@ -332,7 +426,7 @@ export default function ChatScreen() {
             <View style={styles.voiceCenter}>
               <VoiceButton
                 isRecording={isRecording}
-                disabled={isLoading || isProcessing}
+                disabled={isAsking || isProcessing}
                 onPressIn={handleMicPressIn}
                 onPressOut={handleMicPressOut}
               />
@@ -349,22 +443,17 @@ export default function ChatScreen() {
               style={styles.textInput}
               value={inputText}
               onChangeText={setInputText}
-              placeholder="Ask the book club…"
+              placeholder="Say something to the club…"
               placeholderTextColor="#555"
               multiline
               returnKeyType="send"
-              onSubmitEditing={() => {
-                void unlockWebAudioPlayback();
-                void sendMessage(inputText);
-              }}
+              blurOnSubmit
+              onSubmitEditing={sendTyped}
             />
           )}
 
           {/* Mute toggle */}
-          <TouchableOpacity
-            style={styles.iconButton}
-            onPress={() => setIsMuted((m) => !m)}
-          >
+          <TouchableOpacity style={styles.iconButton} onPress={toggleMute}>
             <Ionicons
               name={isMuted ? 'volume-mute' : 'volume-medium-outline'}
               size={22}
@@ -377,13 +466,10 @@ export default function ChatScreen() {
             <TouchableOpacity
               style={[
                 styles.sendButton,
-                !inputText.trim() && styles.sendButtonDisabled,
+                (!inputText.trim() || isAsking) && styles.sendButtonDisabled,
               ]}
-              onPress={() => {
-                void unlockWebAudioPlayback();
-                void sendMessage(inputText);
-              }}
-              disabled={!inputText.trim() || isLoading}
+              onPress={sendTyped}
+              disabled={!inputText.trim() || isAsking}
             >
               <Ionicons name="arrow-up" size={20} color="#fff" />
             </TouchableOpacity>
@@ -393,6 +479,7 @@ export default function ChatScreen() {
     </SafeAreaView>
   );
 }
+
 
 const styles = StyleSheet.create({
   container: {
@@ -415,9 +502,25 @@ const styles = StyleSheet.create({
     fontSize: 13,
     flex: 1,
   },
-  bookBannerAuthor: {
-    color: '#888',
-    fontSize: 12,
+  clubAvatars: {
+    flexDirection: 'row',
+  },
+  clubAvatar: {
+    width: 26,
+    height: 26,
+    borderRadius: 13,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 2,
+    borderColor: '#1a1a2e',
+  },
+  clubAvatarSpeaking: {
+    borderColor: '#4caf50',
+  },
+  clubAvatarInitial: {
+    color: '#fff',
+    fontWeight: '700',
+    fontSize: 11,
   },
   quotaChip: {
     backgroundColor: '#2d2d44',
@@ -460,15 +563,27 @@ const styles = StyleSheet.create({
     fontSize: 13,
     textAlign: 'center',
   },
-  loadingBar: {
-    paddingHorizontal: 20,
-    paddingVertical: 6,
-    backgroundColor: '#1e1e30',
-    borderTopWidth: 1,
-    borderTopColor: '#2d2d44',
+  typingRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginHorizontal: 16,
+    marginTop: 6,
+    marginBottom: 4,
   },
-  loadingText: {
+  typingBubble: {
+    backgroundColor: '#2d2d44',
+    borderRadius: 14,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+  },
+  typingDots: {
     color: '#7c6af7',
+    fontSize: 12,
+    letterSpacing: 2,
+  },
+  typingText: {
+    color: '#888',
     fontSize: 13,
     fontStyle: 'italic',
   },

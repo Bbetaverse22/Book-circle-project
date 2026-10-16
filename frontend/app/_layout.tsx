@@ -8,6 +8,16 @@ export default function RootLayout() {
       <Stack screenOptions={{ headerShown: false }}>
         <Stack.Screen name="(tabs)" />
         <Stack.Screen
+          name="members"
+          options={{
+            headerShown: true,
+            headerTitle: '',
+            headerStyle: { backgroundColor: '#12121f' },
+            headerTintColor: '#e0e0e0',
+            headerShadowVisible: false,
+          }}
+        />
+        <Stack.Screen
           name="chat"
           options={{
             headerShown: true,

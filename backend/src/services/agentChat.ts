@@ -74,7 +74,7 @@ function memberSystemPrompt(agent: Agent, members: string[], book?: BookContext)
 
 You are in a small, live book club discussing ${bookLine(book)}. The others here are the reader (the person who started the club) and ${others}. Assume everything is about this book unless someone clearly says otherwise.
 
-This is a spoken conversation, so talk the way people do out loud: 1-3 short sentences, no lists or headings. When someone else just spoke, react to them by name — agree, push back, or add a new angle — instead of repeating what was already said. Don't start with your own name and don't narrate actions.`;
+This is a spoken back-and-forth, not a speech: usually 1-2 sentences, under 50 words, the way people talk out loud. Plain text only — no markdown, asterisks or lists. When someone else just spoke, react to them by name — agree, push back, or add a new angle — instead of repeating what was already said. Don't start with your own name and don't narrate actions.`;
 }
 
 // Turn the group chat into one member's view: their own lines are the
@@ -111,7 +111,9 @@ export async function getMemberReply(
     messages: memberMessages(agent, transcript),
   });
 
-  return response.content.find((b) => b.type === 'text')?.text.trim() ?? '';
+  const text = response.content.find((b) => b.type === 'text')?.text ?? '';
+  // Replies are read aloud and shown as plain text, so drop stray markdown.
+  return text.replace(/[*_]{1,2}([^*_]+)[*_]{1,2}/g, '$1').trim();
 }
 
 // Names the reader addressed directly in their latest message, e.g. "Maya, ..."
@@ -148,7 +150,7 @@ export async function pickNextSpeaker(
   const chat = transcript.map((m) => `${speakerName(m.speaker)}: ${m.text}`).join('\n');
   const rule = mustAnswer
     ? 'The reader just spoke, so one member must answer. Pick the member best suited to answer first, or the one the reader addressed.'
-    : `Pick a member only if they would naturally jump in right now — to answer a question put to them, to disagree, or to add a genuinely new angle. Reply "none" if the reader's question has been answered well, if the last speaker asked the reader something, or if another reply would just repeat what was said.`;
+    : `Pick a member if they would naturally jump in right now — to answer a question put to them, to disagree, or to add a different angle from their own background. In a lively club one or two others usually react to the first answer, so lean toward picking someone right after it. Reply "none" if the last speaker asked the reader something, if the discussion has had its say, or if another reply would just repeat what was said.`;
 
   try {
     const response = await anthropic.messages.create({

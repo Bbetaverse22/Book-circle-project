@@ -18,8 +18,8 @@ export const ONBOARDING_KEY = 'bookcircle_onboarded';
 const STEPS: Array<{ icon: keyof typeof Ionicons.glyphMap; title: string; body: string }> = [
   {
     icon: 'book',
-    title: 'Pick a book',
-    body: 'Choose a classic from the shelf — the club has read them all.',
+    title: 'Pick a book and your club',
+    body: 'Choose a classic, then the three members you want to talk it over with.',
   },
   {
     icon: 'mic',
@@ -28,8 +28,8 @@ const STEPS: Array<{ icon: keyof typeof Ionicons.glyphMap; title: string; body: 
   },
   {
     icon: 'people',
-    title: 'Hear 7 perspectives',
-    body: 'Every member answers in their own voice — a nurse, a critic, a philosopher, and more.',
+    title: 'Join the conversation',
+    body: 'One member answers, the others jump in when they have something to add — each in their own voice.',
   },
 ];
 
@@ -47,7 +47,7 @@ export default function OnboardingScreen() {
         <Text style={styles.logo}>📚</Text>
         <Text style={styles.title}>Welcome to BookCircle</Text>
         <Text style={styles.subtitle}>
-          Your book club of seven, always ready to talk.
+          Seven readers. Pick three. Start talking.
         </Text>
 
         {/* Members preview */}

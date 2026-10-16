@@ -31,4 +31,4 @@ export async function playAgentVoice(
   await playWebAudioBlob(blob);
 }
 
-export { unlockWebAudioPlayback } from './webAudio';
+export { stopWebAudio as stopAgentVoice, unlockWebAudioPlayback } from './webAudio';

@@ -28,12 +28,16 @@ export async function unlockWebAudioPlayback(): Promise<void> {
   }
 }
 
+// Resolves the clip that is currently playing, if any.
+let finishCurrent: (() => void) | null = null;
+
 export async function playWebAudioBlob(blob: Blob): Promise<void> {
   const url = URL.createObjectURL(blob);
   const element = getSharedElement();
 
   try {
     await new Promise<void>((resolve, reject) => {
+      finishCurrent = resolve;
       element.onended = () => resolve();
       element.onerror = () => reject(new Error('Voice playback failed'));
       element.src = url;
@@ -41,8 +45,18 @@ export async function playWebAudioBlob(blob: Blob): Promise<void> {
       element.play().catch(reject);
     });
   } finally {
+    finishCurrent = null;
     element.onended = null;
     element.onerror = null;
     URL.revokeObjectURL(url);
   }
+}
+
+// Stop the clip that is playing; its playWebAudioBlob() call resolves.
+// Leaves the element alone when no clip is playing, so it can't cancel the
+// unlock started by the same tap.
+export function stopWebAudio(): void {
+  if (!finishCurrent) return;
+  sharedElement?.pause();
+  finishCurrent();
 }

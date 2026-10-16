@@ -43,7 +43,7 @@ export default function HomeScreen() {
 
       {/* Agents strip */}
       <View style={styles.agentsSection}>
-        <Text style={styles.sectionLabel}>Your Club Members</Text>
+        <Text style={styles.sectionLabel}>Meet the Members</Text>
         <FlatList
           data={AGENT_LIST}
           horizontal
@@ -72,7 +72,7 @@ export default function HomeScreen() {
             activeOpacity={0.85}
             onPress={() =>
               router.push({
-                pathname: '/chat',
+                pathname: '/members',
                 params: { bookTitle: item.title, bookAuthor: item.author },
               })
             }
