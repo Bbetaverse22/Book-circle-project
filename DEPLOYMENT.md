@@ -17,10 +17,22 @@ Uses your existing Firebase/Google account. One-time setup ~20 minutes.
 
 ### 1.2 Deploy
 
+One command — the script enables services, creates Firestore if needed, and
+deploys using the API keys already in `backend/.env`:
+
 ```bash
 gcloud auth login
 gcloud config set project YOUR_FIREBASE_PROJECT_ID
+cd backend
+./deploy.sh
+```
 
+Re-running it is safe; it redeploys the latest code.
+
+<details>
+<summary>Manual steps (what the script does)</summary>
+
+```bash
 # Enable required services (first time only)
 gcloud services enable run.googleapis.com cloudbuild.googleapis.com firestore.googleapis.com
 
@@ -34,6 +46,8 @@ gcloud run deploy bookcircle-api \
   --allow-unauthenticated \
   --set-env-vars "ANTHROPIC_API_KEY=sk-ant-...,OPENAI_API_KEY=sk-...,ELEVENLABS_API_KEY=...,REVENUECAT_API_KEY=sk_...(after Phase 3)"
 ```
+
+</details>
 
 > Tip: for better secret hygiene, use Secret Manager instead of
 > `--set-env-vars`: `gcloud run services update bookcircle-api
