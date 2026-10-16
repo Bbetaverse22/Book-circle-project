@@ -14,13 +14,13 @@
     "preview": {
       "distribution": "internal",
       "env": {
-        "EXPO_PUBLIC_API_URL": "https://REPLACE-WITH-CLOUD-RUN-URL.run.app"
+        "EXPO_PUBLIC_API_URL": "https://bookcircle-api-14826724269.us-central1.run.app"
       }
     },
     "production": {
       "autoIncrement": true,
       "env": {
-        "EXPO_PUBLIC_API_URL": "https://REPLACE-WITH-CLOUD-RUN-URL.run.app"
+        "EXPO_PUBLIC_API_URL": "https://bookcircle-api-14826724269.us-central1.run.app"
       }
     }
   },
