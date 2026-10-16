@@ -1,11 +1,18 @@
 import Anthropic from '@anthropic-ai/sdk';
-import { Agent } from '../prompts';
-import { MAX_HISTORY_TURN_CHARS, MAX_HISTORY_TURNS } from '../config';
+import { Agent, AGENTS } from '../prompts';
+import { CLUB_SIZE, MAX_HISTORY_TURN_CHARS, MAX_HISTORY_TURNS } from '../config';
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
-export type ConversationTurn = { role: 'user' | 'assistant'; content: string };
+// Members speak with this model; the moderator that picks who talks next
+// only outputs a single id, so it runs at low effort.
+const MEMBER_MODEL = 'claude-opus-4-6';
+const MODERATOR_MODEL = 'claude-opus-5-5';
+
 export type BookContext = { title: string; author?: string };
+
+// One line of the club's group chat. `speaker` is 'user' or a member id.
+export type ClubMessage = { speaker: string; text: string };
 
 const MAX_BOOK_FIELD_CHARS = 200;
 
@@ -24,43 +31,149 @@ export function sanitizeBook(book: unknown): BookContext | undefined {
   };
 }
 
-function systemPromptFor(agent: Agent, book?: BookContext): string {
-  if (!book) return agent.systemPrompt;
-  const byline = book.author ? ` by ${book.author}` : '';
-  return `${agent.systemPrompt}\n\nYour book club is currently discussing "${book.title}"${byline}. Assume every question is about this book unless the user clearly says otherwise.`;
+// Returns exactly CLUB_SIZE distinct, known member ids, or null.
+export function sanitizeMembers(members: unknown): string[] | null {
+  if (!Array.isArray(members)) return null;
+  const ids = [...new Set(members.filter((m): m is string => typeof m === 'string'))];
+  if (ids.length !== CLUB_SIZE || !ids.every((id) => AGENTS[id])) return null;
+  return ids;
 }
 
-// Sanitize client-supplied history: cap turn count and per-turn size,
-// and drop anything that isn't a plain user/assistant text turn.
-export function sanitizeHistory(history: unknown): ConversationTurn[] {
-  if (!Array.isArray(history)) return [];
-  return history
+// Keep only well-formed lines from the user or this club's members, capped
+// in count and size.
+export function sanitizeTranscript(transcript: unknown, members: string[]): ClubMessage[] {
+  if (!Array.isArray(transcript)) return [];
+  return transcript
     .filter(
-      (turn): turn is ConversationTurn =>
-        !!turn &&
-        typeof turn === 'object' &&
-        (turn.role === 'user' || turn.role === 'assistant') &&
-        typeof turn.content === 'string',
+      (m): m is ClubMessage =>
+        !!m &&
+        typeof m === 'object' &&
+        typeof m.text === 'string' &&
+        typeof m.speaker === 'string' &&
+        (m.speaker === 'user' || members.includes(m.speaker)),
     )
     .slice(-MAX_HISTORY_TURNS)
-    .map((turn) => ({
-      role: turn.role,
-      content: turn.content.slice(0, MAX_HISTORY_TURN_CHARS),
-    }));
+    .map((m) => ({ speaker: m.speaker, text: m.text.slice(0, MAX_HISTORY_TURN_CHARS) }));
 }
 
-export async function getAgentReply(
-  agent: Agent,
-  text: string,
-  history: ConversationTurn[],
+function speakerName(speaker: string): string {
+  return speaker === 'user' ? 'Reader' : (AGENTS[speaker]?.name ?? speaker);
+}
+
+function bookLine(book?: BookContext): string {
+  if (!book) return 'a book the reader picked';
+  return `"${book.title}"${book.author ? ` by ${book.author}` : ''}`;
+}
+
+function memberSystemPrompt(agent: Agent, members: string[], book?: BookContext): string {
+  const others = members
+    .filter((id) => id !== agent.id)
+    .map((id) => `${AGENTS[id].name} (${AGENTS[id].role})`)
+    .join(' and ');
+  return `${agent.systemPrompt}
+
+You are in a small, live book club discussing ${bookLine(book)}. The others here are the reader (the person who started the club) and ${others}. Assume everything is about this book unless someone clearly says otherwise.
+
+This is a spoken conversation, so talk the way people do out loud: 1-3 short sentences, no lists or headings. When someone else just spoke, react to them by name — agree, push back, or add a new angle — instead of repeating what was already said. Don't start with your own name and don't narrate actions.`;
+}
+
+// Turn the group chat into one member's view: their own lines are the
+// assistant turns, everyone else's are user turns labelled with the speaker.
+function memberMessages(agent: Agent, transcript: ClubMessage[]): Anthropic.MessageParam[] {
+  const messages: Anthropic.MessageParam[] = [];
+  for (const line of transcript) {
+    const role = line.speaker === agent.id ? 'assistant' : 'user';
+    const content = role === 'assistant' ? line.text : `${speakerName(line.speaker)}: ${line.text}`;
+    const last = messages[messages.length - 1];
+    if (last && last.role === role) {
+      last.content = `${last.content as string}\n\n${content}`;
+    } else {
+      messages.push({ role, content });
+    }
+  }
+  if (messages[0]?.role === 'assistant') {
+    messages.unshift({ role: 'user', content: '(The book club conversation so far.)' });
+  }
+  return messages;
+}
+
+export async function getMemberReply(
+  agentId: string,
+  members: string[],
+  transcript: ClubMessage[],
   book?: BookContext,
 ): Promise<string> {
+  const agent = AGENTS[agentId];
   const response = await anthropic.messages.create({
-    model: 'claude-opus-4-6',
-    max_tokens: 300, // agents answer in 2–3 sentences; keep output cost bounded
-    system: systemPromptFor(agent, book),
-    messages: [...history, { role: 'user', content: text }],
+    model: MEMBER_MODEL,
+    max_tokens: 300, // spoken replies are 1–3 sentences; keep output cost bounded
+    system: memberSystemPrompt(agent, members, book),
+    messages: memberMessages(agent, transcript),
   });
 
-  return response.content.find((b) => b.type === 'text')?.text ?? '';
+  return response.content.find((b) => b.type === 'text')?.text.trim() ?? '';
+}
+
+// Names the reader addressed directly in their latest message, e.g. "Maya, ..."
+function addressedMember(text: string, members: string[]): string | undefined {
+  const lower = text.toLowerCase();
+  return members.find((id) => {
+    const name = AGENTS[id].name.toLowerCase();
+    const firstName = name.replace(/^dr\.\s*/, '');
+    return new RegExp(`\\b(${name.replace('.', '\\.')}|${firstName})\\b`).test(lower);
+  });
+}
+
+// Decide who speaks next. With `mustAnswer` (right after the reader spoke)
+// someone always replies; otherwise the moderator may hand the floor back to
+// the reader by returning null. Never picks whoever spoke last.
+export async function pickNextSpeaker(
+  members: string[],
+  transcript: ClubMessage[],
+  book: BookContext | undefined,
+  mustAnswer: boolean,
+): Promise<string | null> {
+  const last = transcript[transcript.length - 1];
+  const candidates = members.filter((id) => id !== last?.speaker);
+  if (candidates.length === 0) return null;
+
+  if (mustAnswer && last?.speaker === 'user') {
+    const addressed = addressedMember(last.text, candidates);
+    if (addressed) return addressed;
+  }
+
+  const roster = candidates
+    .map((id) => `- ${id}: ${AGENTS[id].name}, ${AGENTS[id].role}`)
+    .join('\n');
+  const chat = transcript.map((m) => `${speakerName(m.speaker)}: ${m.text}`).join('\n');
+  const rule = mustAnswer
+    ? 'The reader just spoke, so one member must answer. Pick the member best suited to answer first, or the one the reader addressed.'
+    : `Pick a member only if they would naturally jump in right now — to answer a question put to them, to disagree, or to add a genuinely new angle. Reply "none" if the reader's question has been answered well, if the last speaker asked the reader something, or if another reply would just repeat what was said.`;
+
+  try {
+    const response = await anthropic.messages.create({
+      model: MODERATOR_MODEL,
+      max_tokens: 1024,
+      // Not in this SDK version's types; the API reads it from the body.
+      ...({ output_config: { effort: 'low' } } as object),
+      system: `You moderate a small book club discussing ${bookLine(book)}. You never speak yourself; you only choose who talks next so the conversation feels natural.`,
+      messages: [
+        {
+          role: 'user',
+          content: `Members who could speak next:\n${roster}\n\nConversation:\n${chat}\n\n${rule}\n\nReply with only one id from the list${mustAnswer ? '' : ' or "none"'}.`,
+        },
+      ],
+    });
+    const answer = (response.content.find((b) => b.type === 'text')?.text ?? '')
+      .trim()
+      .toLowerCase();
+    const picked = candidates.find((id) => answer.includes(id));
+    if (picked) return picked;
+    if (!mustAnswer) return null;
+  } catch (error) {
+    console.error('Moderator failed:', error);
+    if (!mustAnswer) return null;
+  }
+  // Fall back to a random member so the reader always gets an answer.
+  return candidates[Math.floor(Math.random() * candidates.length)];
 }

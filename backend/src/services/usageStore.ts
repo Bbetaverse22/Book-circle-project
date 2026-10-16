@@ -5,7 +5,7 @@
 // in-memory store for local development so the backend runs without any
 // Firebase setup.
 
-export type UsageCategory = 'questions' | 'tts' | 'transcribe';
+export type UsageCategory = 'questions' | 'turns' | 'tts' | 'transcribe';
 
 export interface UsageSnapshot {
   used: number;

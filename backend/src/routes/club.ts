@@ -1,14 +1,43 @@
 import { Router, Request, Response, NextFunction } from 'express';
-import { AGENT_LIST } from '../prompts';
-import { MAX_QUESTION_CHARS } from '../config';
+import { MAX_QUESTION_CHARS, MAX_REPLIES_PER_QUESTION } from '../config';
 import { usageLimit } from '../middleware/usageLimit';
-import { getAgentReply, sanitizeBook, sanitizeHistory } from '../services/agentChat';
+import {
+  ClubMessage,
+  getMemberReply,
+  pickNextSpeaker,
+  sanitizeBook,
+  sanitizeMembers,
+  sanitizeTranscript,
+} from '../services/agentChat';
 
 const router = Router();
 
+// The club is a group chat between the reader and the members they picked.
+// Each reply is its own request so the app can show and speak it before the
+// next member decides whether to add something:
+//
+//   POST /club/ask       reader's message → the first member's answer
+//   POST /club/followup  → another member's addition, or { done: true }
+//
+// Both take { members: string[3], book?, transcript: ClubMessage[] }.
+
+type ClubBody = { members?: unknown; book?: unknown; transcript?: unknown; text?: unknown };
+
 // Validate BEFORE usageLimit so malformed requests never burn quota.
+function validateClub(req: Request, res: Response, next: NextFunction): void {
+  const members = sanitizeMembers((req.body as ClubBody).members);
+  if (!members) {
+    res.status(400).json({ error: 'members must be 3 distinct club member ids' });
+    return;
+  }
+  res.locals.members = members;
+  res.locals.book = sanitizeBook((req.body as ClubBody).book);
+  res.locals.transcript = sanitizeTranscript((req.body as ClubBody).transcript, members);
+  next();
+}
+
 function validateAsk(req: Request, res: Response, next: NextFunction): void {
-  const { text } = req.body as { text?: unknown };
+  const { text } = req.body as ClubBody;
   if (typeof text !== 'string' || !text.trim()) {
     res.status(400).json({ error: 'text is required' });
     return;
@@ -22,37 +51,58 @@ function validateAsk(req: Request, res: Response, next: NextFunction): void {
   next();
 }
 
-// POST /club/ask
-// Body: { text: string, history?: ConversationTurn[], book?: { title, author? } }
-// Fans the question out to all agents server-side and returns every reply.
-// One request = one "question" against the device's daily quota, which makes
-// usage accounting airtight (no way to spend quota per-agent).
-router.post('/ask', validateAsk, usageLimit('questions'), async (req: Request, res: Response) => {
-  const { text, history, book } = req.body as { text: string; history?: unknown; book?: unknown };
+async function reply(res: Response, transcript: ClubMessage[], mustAnswer: boolean) {
+  const { members, book } = res.locals;
+  const speaker = await pickNextSpeaker(members, transcript, book, mustAnswer);
+  if (!speaker) return null;
+  const text = await getMemberReply(speaker, members, transcript, book);
+  return text ? { speaker, text } : null;
+}
 
-  const cleanHistory = sanitizeHistory(history);
-  const cleanBook = sanitizeBook(book);
+// One reader message = one "question" against the daily quota.
+router.post(
+  '/ask',
+  validateClub,
+  validateAsk,
+  usageLimit('questions'),
+  async (req: Request, res: Response) => {
+    const transcript: ClubMessage[] = [
+      ...res.locals.transcript,
+      { speaker: 'user', text: (req.body as { text: string }).text.trim() },
+    ];
+    try {
+      const message = await reply(res, transcript, true);
+      if (!message) throw new Error('Empty reply');
+      res.json({ message, usage: res.locals.usage });
+    } catch (error) {
+      console.error('Club ask error:', error);
+      res.status(502).json({ error: 'The club could not respond' });
+    }
+  },
+);
 
-  const responses = await Promise.all(
-    AGENT_LIST.map(async (agent) => {
-      try {
-        const reply = await getAgentReply(agent, text.trim(), cleanHistory, cleanBook);
-        return { agentId: agent.id, text: reply };
-      } catch (error) {
-        console.error(`Agent ${agent.id} response error:`, error);
-        return { agentId: agent.id, text: '', error: true as const };
-      }
-    }),
-  );
-
-  // If every agent failed, surface it as a server error instead of an
-  // empty-looking success.
-  if (responses.every((r) => 'error' in r)) {
-    res.status(502).json({ error: 'All agents failed to respond' });
-    return;
-  }
-
-  res.json({ responses, usage: res.locals.usage });
-});
+// Follow-ups draw on a separate daily "turns" quota, and stop once the
+// members have replied MAX_REPLIES_PER_QUESTION times since the reader spoke.
+router.post(
+  '/followup',
+  validateClub,
+  usageLimit('turns'),
+  async (_req: Request, res: Response) => {
+    const transcript: ClubMessage[] = res.locals.transcript;
+    const lastUser = transcript.map((m) => m.speaker).lastIndexOf('user');
+    const repliesSinceUser = transcript.length - 1 - lastUser;
+    if (lastUser === -1 || repliesSinceUser < 1 || repliesSinceUser >= MAX_REPLIES_PER_QUESTION) {
+      res.json({ done: true });
+      return;
+    }
+    try {
+      const message = await reply(res, transcript, false);
+      res.json(message ? { message } : { done: true });
+    } catch (error) {
+      console.error('Club follow-up error:', error);
+      res.json({ done: true });
+    }
+  },
+);
 
 export default router;
