@@ -16,6 +16,7 @@ export default function TabLayout() {
         name="index"
         options={{
           title: 'BookCircle',
+          headerShown: false,
           tabBarLabel: 'Home',
           tabBarIcon: ({ color, size }) => (
             <Ionicons name="book-outline" size={size} color={color} />

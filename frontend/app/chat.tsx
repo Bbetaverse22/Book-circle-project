@@ -72,12 +72,12 @@ export default function ChatScreen() {
 
   const { startRecording, stopAndTranscribe, isRecording, isProcessing } = useVoiceRecorder();
 
-  // Without a full club (e.g. an old link), go pick members first.
+  // Without a full club (e.g. an old link), go back to the start page.
   useEffect(() => {
     if (memberIds.length !== CLUB_SIZE) {
-      router.replace({ pathname: '/members', params: { bookTitle, bookAuthor } });
+      router.replace('/');
     }
-  }, [memberIds, router, bookTitle, bookAuthor]);
+  }, [memberIds, router]);
 
   // Load current quota so the free-question counter is right from the start.
   useEffect(() => {
@@ -110,7 +110,7 @@ export default function ChatScreen() {
 
   const clubBody = (lines: ClubLine[]) => ({
     members: memberIds,
-    book: bookTitle ? { title: bookTitle, author: bookAuthor } : undefined,
+    book: bookTitle ? { title: bookTitle, author: bookAuthor || undefined } : undefined,
     transcript: lines,
   });
 
@@ -290,7 +290,7 @@ export default function ChatScreen() {
 
   const handleMicPressOut = () => {
     if (isProcessing) return;
-    void stopAndTranscribe({ title: bookTitle, author: bookAuthor }).then((transcribed) => {
+    void stopAndTranscribe({ title: bookTitle, author: bookAuthor || undefined }).then((transcribed) => {
       if (transcribed) {
         void sendMessage(transcribed);
       }
